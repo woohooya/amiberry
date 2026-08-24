@@ -51,6 +51,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libxml2-dev libpng-dev libmpg123-dev libflac-dev
 
+      - name: Apply Android NDK libc++ Header Patches (Fix unordered_map include)
+        run: |
+          echo "Patching src/osdep/amiberry.cpp for Android NDK Clang libc++ compatibility..."
+          if [ -f "src/osdep/amiberry.cpp" ]; then
+            if ! grep -q "#include <unordered_map>" src/osdep/amiberry.cpp; then
+              sed -i '1s/^/#include <unordered_map>\n#include <functional>\n/' src/osdep/amiberry.cpp
+              echo "Successfully added <unordered_map> to src/osdep/amiberry.cpp"
+            fi
+          fi
+          if [ -f "src/osdep/amiberry.h" ]; then
+            if ! grep -q "#include <unordered_map>" src/osdep/amiberry.h; then
+              sed -i '1s/^/#include <unordered_map>\n/' src/osdep/amiberry.h
+            fi
+          fi
+
       - name: Configure CMake Native Toolchain
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
