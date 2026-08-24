@@ -1,0 +1,96 @@
+name: Build Amiberry Android APK (Samsung Tab S8 ARM64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build Type'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - 'Release'
+          - 'Debug'
+      enable_jit:
+        description: 'Enable ARM64 JIT Compilation'
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches:
+      - master
+
+jobs:
+  build-android-arm64:
+    name: Compile Amiberry for Android (arm64-v8a)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Amiberry Repository & Submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK (25.2.9519653) & Build Tools
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libxml2-dev libpng-dev libmpg123-dev libflac-dev
+
+      - name: Configure CMake Native Toolchain
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
+          cmake -B build-android \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'Release' }} \
+            -DUSE_JIT=${{ inputs.enable_jit == true && 'ON' || 'ON' }} \
+            -DARM64_JIT=ON \
+            -DUSE_OPENGL=ON \
+            -DUSE_SDL2=ON
+
+      - name: Compile Native C++ Amiberry Core
+        run: |
+          cmake --build build-android --config ${{ inputs.build_type || 'Release' }} -j$(nproc)
+
+      - name: Assemble Android APK Package
+        run: |
+          if [ -f "./android/gradlew" ]; then
+            cd android
+            chmod +x gradlew
+            ./gradlew assemble${{ inputs.build_type || 'Release' }} --no-daemon
+          elif [ -f "./gradlew" ]; then
+            chmod +x gradlew
+            ./gradlew assemble${{ inputs.build_type || 'Release' }} --no-daemon
+          fi
+
+      - name: Collect Output APKs
+        run: |
+          mkdir -p build_output_apks
+          find . -name "*.apk" -exec cp {} build_output_apks/ \;
+          echo "Found compiled APK files:"
+          ls -la build_output_apks/
+
+      - name: Upload Amiberry APK Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amiberry-arm64-samsung-tab-s8-apk
+          path: build_output_apks/*.apk
+          retention-days: 30
