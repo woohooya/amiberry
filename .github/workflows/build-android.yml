@@ -53,23 +53,32 @@ jobs:
 
       - name: Apply Android NDK Compatibility Patches (unordered_map & posix_spawn)
         run: |
-          echo "Applying Android NDK Clang compatibility patches..."
-          # 1. Fix missing <unordered_map> in amiberry.cpp
-          if [ -f "src/osdep/amiberry.cpp" ]; then
-            printf '#include <unordered_map>\n#include <functional>\n' | cat - src/osdep/amiberry.cpp > /tmp/amiberry.cpp && mv /tmp/amiberry.cpp src/osdep/amiberry.cpp
-            echo "Successfully added <unordered_map> to src/osdep/amiberry.cpp"
-          fi
-          if [ -f "src/osdep/amiberry.h" ]; then
-            printf '#include <unordered_map>\n' | cat - src/osdep/amiberry.h > /tmp/amiberry.h 2>/dev/null && mv /tmp/amiberry.h src/osdep/amiberry.h 2>/dev/null || true
-          fi
+          python3 -c "
+          import os
 
-          # 2. Fix posix_spawn in amiberry_update.cpp (replace spawn.h with inline stubs for Android)
-          if [ -f "src/osdep/amiberry_update.cpp" ]; then
-            sed -i 's|#include.*spawn.h.*|#include <unistd.h>
-template<typename... T> static inline int posix_spawn(T&&...) { return -1; }
-template<typename... T> static inline int posix_spawnp(T&&...) { return -1; }|g' src/osdep/amiberry_update.cpp
-            echo "Patched src/osdep/amiberry_update.cpp with posix_spawn template stubs"
-          fi
+          # 1. Fix missing <unordered_map> in amiberry.cpp
+          if os.path.exists('src/osdep/amiberry.cpp'):
+              with open('src/osdep/amiberry.cpp', 'r') as f:
+                  content = f.read()
+              if '#include <unordered_map>' not in content:
+                  with open('src/osdep/amiberry.cpp', 'w') as f:
+                      f.write('#include <unordered_map>\n#include <functional>\n' + content)
+                  print('Patched amiberry.cpp with <unordered_map>')
+
+          # 2. Fix posix_spawn in amiberry_update.cpp by replacing spawn.h with safe Android stubs
+          if os.path.exists('src/osdep/amiberry_update.cpp'):
+              with open('src/osdep/amiberry_update.cpp', 'r') as f:
+                  content = f.read()
+              target = '#include <spawn.h>'
+              stub = '#if !defined(__ANDROID__)\n#include <spawn.h>\n#else\nstatic inline int posix_spawn(...) { return -1; }\nstatic inline int posix_spawnp(...) { return -1; }\n#endif'
+              if target in content:
+                  content = content.replace(target, stub)
+              else:
+                  content = stub + '\n' + content
+              with open('src/osdep/amiberry_update.cpp', 'w') as f:
+                  f.write(content)
+              print('Patched amiberry_update.cpp with posix_spawn stub')
+          "
 
       - name: Configure CMake Native Toolchain
         run: |
