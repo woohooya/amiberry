@@ -56,22 +56,16 @@ jobs:
           echo "Applying Android NDK Clang compatibility patches..."
           # 1. Fix missing <unordered_map> in amiberry.cpp
           if [ -f "src/osdep/amiberry.cpp" ]; then
-            sed -i '1s/^/#include <unordered_map>
-#include <functional>
-/' src/osdep/amiberry.cpp
+            printf '#include <unordered_map>\n#include <functional>\n' | cat - src/osdep/amiberry.cpp > /tmp/amiberry.cpp && mv /tmp/amiberry.cpp src/osdep/amiberry.cpp
             echo "Successfully added <unordered_map> to src/osdep/amiberry.cpp"
           fi
           if [ -f "src/osdep/amiberry.h" ]; then
-            sed -i '1s/^/#include <unordered_map>
-/' src/osdep/amiberry.h 2>/dev/null || true
+            printf '#include <unordered_map>\n' | cat - src/osdep/amiberry.h > /tmp/amiberry.h 2>/dev/null && mv /tmp/amiberry.h src/osdep/amiberry.h 2>/dev/null || true
           fi
 
           # 2. Fix posix_spawn in amiberry_update.cpp by defining dummy macro stub for Android libc
           if [ -f "src/osdep/amiberry_update.cpp" ]; then
-            sed -i '1s/^/#include <unistd.h>
-#define posix_spawn(...) (-1)
-#define posix_spawnp(...) (-1)
-/' src/osdep/amiberry_update.cpp
+            printf '#include <unistd.h>\n#define posix_spawn(...) (-1)\n#define posix_spawnp(...) (-1)\n' | cat - src/osdep/amiberry_update.cpp > /tmp/amiberry_update.cpp && mv /tmp/amiberry_update.cpp src/osdep/amiberry_update.cpp
             echo "Patched src/osdep/amiberry_update.cpp with posix_spawn stub for Android libc"
           fi
 
