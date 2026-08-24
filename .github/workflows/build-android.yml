@@ -51,9 +51,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libxml2-dev libpng-dev libmpg123-dev libflac-dev
 
-      - name: Apply Android NDK libc++ Header Patches (Fix unordered_map include)
+      - name: Apply Android NDK Compatibility Patches (unordered_map & posix_spawn)
         run: |
-          echo "Patching src/osdep/amiberry.cpp for Android NDK Clang libc++ compatibility..."
+          echo "Applying Android NDK Clang compatibility patches..."
+          # 1. Fix missing <unordered_map> in amiberry.cpp
           if [ -f "src/osdep/amiberry.cpp" ]; then
             if ! grep -q "#include <unordered_map>" src/osdep/amiberry.cpp; then
               sed -i '1s/^/#include <unordered_map>\n#include <functional>\n/' src/osdep/amiberry.cpp
@@ -66,6 +67,13 @@ jobs:
             fi
           fi
 
+          # 2. Fix posix_spawn in amiberry_update.cpp (posix_spawn is not available on older Android bionic / disabled for Android APK)
+          if [ -f "src/osdep/amiberry_update.cpp" ]; then
+            sed -i 's/int ret = posix_spawn/int ret = -1; // posix_spawn disabled on Android\n\t// int disabled_ret = posix_spawn/g' src/osdep/amiberry_update.cpp || true
+            sed -i 's/#include <spawn.h>/#if !defined(__ANDROID__)\n#include <spawn.h>\n#endif/g' src/osdep/amiberry_update.cpp || true
+            echo "Patched src/osdep/amiberry_update.cpp for Android libc (posix_spawn)"
+          fi
+
       - name: Configure CMake Native Toolchain
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
@@ -73,11 +81,12 @@ jobs:
             -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_PLATFORM=android-28 \
             -DANDROID_STL=c++_shared \
             -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'Release' }} \
             -DUSE_JIT=${{ inputs.enable_jit == true && 'ON' || 'ON' }} \
             -DARM64_JIT=ON \
+            -DENABLE_AUTO_UPDATE=OFF \
             -DUSE_OPENGL=ON \
             -DUSE_SDL2=ON
 
