@@ -197,7 +197,9 @@ jobs:
           
           # Fallback
           if [ -z "$(ls -A build_output_apks/*.apk 2>/dev/null)" ]; then
-            find . -name "*.apk" -not -path "*/build_output_apks/*" -exec cp {} build_output_apks/ ;
+            find . -name "*.apk" -not -path "*/build_output_apks/*" | while read -r apk_path; do
+              cp "$apk_path" build_output_apks/
+            done
           fi
           
           echo "=== Ready-to-Install Amiberry APKs for Samsung Galaxy Tab S8 ==="
