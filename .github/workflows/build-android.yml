@@ -54,9 +54,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libxml2-dev libpng-dev libmpg123-dev libflac-dev
 
-      - name: Apply Android Compatibility Patches (Headers & AndroidManifest)
+      - name: "Apply Android Compatibility Patches (Headers & AndroidManifest)"
+        shell: python
         run: |
-          python3 -c "
           import os, glob, re
 
           # 1. Fix missing <unordered_map> in amiberry.cpp
@@ -65,7 +65,9 @@ jobs:
                   content = f.read()
               if '#include <unordered_map>' not in content:
                   with open('src/osdep/amiberry.cpp', 'w') as f:
-                      f.write('#include <unordered_map>\n#include <functional>\n' + content)
+                      f.write('#include <unordered_map>
+#include <functional>
+' + content)
                   print('Patched amiberry.cpp with <unordered_map>')
 
           # 2. Fix posix_spawn in amiberry_update.cpp by replacing spawn.h with safe Android stubs
@@ -73,11 +75,17 @@ jobs:
               with open('src/osdep/amiberry_update.cpp', 'r') as f:
                   content = f.read()
               target = '#include <spawn.h>'
-              stub = '#if !defined(__ANDROID__)\n#include <spawn.h>\n#else\nstatic inline int posix_spawn(...) { return -1; }\nstatic inline int posix_spawnp(...) { return -1; }\n#endif'
+              stub = '#if !defined(__ANDROID__)
+#include <spawn.h>
+#else
+static inline int posix_spawn(...) { return -1; }
+static inline int posix_spawnp(...) { return -1; }
+#endif'
               if target in content:
                   content = content.replace(target, stub)
               else:
-                  content = stub + '\n' + content
+                  content = stub + '
+' + content
               with open('src/osdep/amiberry_update.cpp', 'w') as f:
                   f.write(content)
               print('Patched amiberry_update.cpp with posix_spawn stub')
@@ -100,10 +108,20 @@ jobs:
                   with open(m_path, 'w') as f:
                       f.write(m_content)
                   print(f'Patched Android 12+ exported attributes in {m_path}')
-          "
 
-      - name: Configure CMake Native Toolchain
+      - name: "Configure CMake Native Toolchain"
+        env:
+          INPUT_BUILD_TYPE: ${{ inputs.build_type }}
+          INPUT_ENABLE_JIT: ${{ inputs.enable_jit }}
         run: |
+          BUILD_TYPE="${INPUT_BUILD_TYPE:-Release}"
+          ENABLE_JIT="ON"
+          if [ "$INPUT_ENABLE_JIT" = "false" ]; then
+            ENABLE_JIT="OFF"
+          elif [ "$INPUT_ENABLE_JIT" = "true" ]; then
+            ENABLE_JIT="ON"
+          fi
+
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
           cmake -B build-android \
             -G Ninja \
@@ -111,17 +129,20 @@ jobs:
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-28 \
             -DANDROID_STL=c++_shared \
-            -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'Release' }} \
-            -DUSE_JIT=${{ inputs.enable_jit == true && 'ON' || 'ON' }} \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DUSE_JIT=$ENABLE_JIT \
             -DARM64_JIT=ON \
             -DENABLE_AUTO_UPDATE=OFF \
             -DCMAKE_OBJECT_PATH_MAX=1024 \
             -DUSE_OPENGL=ON \
             -DUSE_SDL2=ON
 
-      - name: Compile Native C++ Amiberry Core
+      - name: "Compile Native C++ Amiberry Core"
+        env:
+          INPUT_BUILD_TYPE: ${{ inputs.build_type }}
         run: |
-          cmake --build build-android --config ${{ inputs.build_type || 'Release' }} -j$(nproc)
+          BUILD_TYPE="${INPUT_BUILD_TYPE:-Release}"
+          cmake --build build-android --config $BUILD_TYPE -j$(nproc)
 
       - name: Stage Runtime Assets into Android Project (Fonts, Data, Configs)
         run: |
