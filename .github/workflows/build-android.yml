@@ -59,9 +59,10 @@ jobs:
           # 1. Patch missing C++ headers in amiberry.cpp
           if [ -f "src/osdep/amiberry.cpp" ]; then
             if ! grep -q "unordered_map" src/osdep/amiberry.cpp; then
-              printf '%s
-%s
-%s' '#include <unordered_map>' '#include <functional>' "$(cat src/osdep/amiberry.cpp)" > src/osdep/amiberry.cpp
+              echo "#include <unordered_map>" > temp_hdr.txt
+              echo "#include <functional>" >> temp_hdr.txt
+              cat src/osdep/amiberry.cpp >> temp_hdr.txt
+              mv temp_hdr.txt src/osdep/amiberry.cpp
               echo "Patched src/osdep/amiberry.cpp"
             fi
           fi
