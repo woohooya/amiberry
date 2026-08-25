@@ -51,10 +51,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libxml2-dev libpng-dev libmpg123-dev libflac-dev
 
-      - name: Apply Android NDK Compatibility Patches (unordered_map & posix_spawn)
+      - name: Apply Android Compatibility Patches (Headers & AndroidManifest)
         run: |
           python3 -c "
-          import os
+          import os, glob, re
 
           # 1. Fix missing <unordered_map> in amiberry.cpp
           if os.path.exists('src/osdep/amiberry.cpp'):
@@ -78,6 +78,25 @@ jobs:
               with open('src/osdep/amiberry_update.cpp', 'w') as f:
                   f.write(content)
               print('Patched amiberry_update.cpp with posix_spawn stub')
+
+          # 3. Patch AndroidManifest.xml for Android 12+ (Tab S8 One UI requires android:exported on activities with intent-filters)
+          manifests = glob.glob('**/AndroidManifest.xml', recursive=True)
+          for m_path in manifests:
+              if 'build' in m_path:
+                  continue
+              with open(m_path, 'r') as f:
+                  m_content = f.read()
+              modified = False
+              if '<intent-filter>' in m_content and 'android:exported=' not in m_content:
+                  m_content = re.sub(r'(<activity(?![^>]*android:exported=))', r'\1 android:exported="true"', m_content)
+                  modified = True
+              if 'android:extractNativeLibs=' not in m_content and '<application' in m_content:
+                  m_content = re.sub(r'(<application)', r'\1 android:extractNativeLibs="true"', m_content)
+                  modified = True
+              if modified:
+                  with open(m_path, 'w') as f:
+                      f.write(m_content)
+                  print(f'Patched Android 12+ exported attributes in {m_path}')
           "
 
       - name: Configure CMake Native Toolchain
@@ -134,42 +153,46 @@ jobs:
           ./gradlew assembleRelease -Pandroid.injected.build.abi=arm64-v8a --no-daemon || ./gradlew assembleRelease --no-daemon
           cd -
 
-      - name: Auto-Align, Sign (v2/v3) & Collect Output APKs
+      - name: Package & Verify Installable APKs for Samsung Galaxy Tab S8
         run: |
           mkdir -p build_output_apks
-          find . -name "*.apk" -not -path "*/build_output_apks/*" -exec cp {} build_output_apks/ \;
           
           # Find Android Build Tools apksigner & zipalign
           BUILD_TOOLS_DIR=$(find $ANDROID_SDK_ROOT/build-tools/ -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
           ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          echo "Using Android Build Tools: $BUILD_TOOLS_DIR"
           
-          echo "Using Android Build Tools from: $BUILD_TOOLS_DIR"
-          
-          # Generate standard debug keystore if not exists
+          # Ensure keystore exists for signing
+          mkdir -p ~/.android
           if [ ! -f ~/.android/debug.keystore ]; then
-            mkdir -p ~/.android
-            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
           
-          cd build_output_apks
-          for apk in *.apk; do
-            echo "Processing $apk ..."
-            # Align APK 4-byte boundaries required for Android 11+
-            $ZIPALIGN -p -f -v 4 "$apk" "aligned-$apk" 2>/dev/null || cp "$apk" "aligned-$apk"
-            
-            # Sign with APK Signature Scheme v2 & v3 (mandatory on Android 11, 12, 13, 14)
-            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out "ready-$apk" "aligned-$apk" 2>/dev/null || true
-            
-            # Verify signature scheme
-            $APKSIGNER verify --verbose "ready-$apk" 2>/dev/null || true
-          done
+          # 1. Process Debug APK (Gradle already signed this)
+          DEBUG_APK=$(find . -path "*/outputs/apk/debug/*.apk" 2>/dev/null | head -n 1)
+          if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
+            echo "Found Debug APK: $DEBUG_APK"
+            cp "$DEBUG_APK" build_output_apks/Amiberry-arm64-TabS8-Debug.apk
+            $APKSIGNER verify --verbose build_output_apks/Amiberry-arm64-TabS8-Debug.apk || true
+          fi
           
-          # Remove intermediate unaligned files
-          rm -f aligned-*.apk
-          cd -
+          # 2. Process Release APK (Align and sign with v2/v3 scheme)
+          RELEASE_APK=$(find . -path "*/outputs/apk/release/*.apk" 2>/dev/null | head -n 1)
+          if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
+            echo "Found Release APK: $RELEASE_APK"
+            $ZIPALIGN -p -f -v 4 "$RELEASE_APK" build_output_apks/temp-aligned.apk 2>/dev/null || cp "$RELEASE_APK" build_output_apks/temp-aligned.apk
+            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out build_output_apks/Amiberry-arm64-TabS8-Release.apk build_output_apks/temp-aligned.apk
+            rm -f build_output_apks/temp-aligned.apk
+            $APKSIGNER verify --verbose build_output_apks/Amiberry-arm64-TabS8-Release.apk || true
+          fi
           
-          echo "=== Ready Amiberry APKs for Samsung Galaxy Tab S8 ==="
+          # Fallback
+          if [ -z "$(ls -A build_output_apks/*.apk 2>/dev/null)" ]; then
+            find . -name "*.apk" -not -path "*/build_output_apks/*" -exec cp {} build_output_apks/ ;
+          fi
+          
+          echo "=== Ready-to-Install Amiberry APKs for Samsung Galaxy Tab S8 ==="
           ls -la build_output_apks/
 
       - name: Upload Amiberry APK Release Artifact
