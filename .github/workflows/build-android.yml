@@ -56,15 +56,22 @@ jobs:
 
       - name: "Apply Android Compatibility Patches"
         run: |
-          # 1. Patch missing C++ headers in amiberry.cpp
+          # 1. Patch missing C++ headers in amiberry.cpp and sysdeps
           if [ -f "src/osdep/amiberry.cpp" ]; then
-            if ! grep -q "unordered_map" src/osdep/amiberry.cpp; then
-              echo "#include <unordered_map>" > temp_hdr.txt
-              echo "#include <functional>" >> temp_hdr.txt
-              cat src/osdep/amiberry.cpp >> temp_hdr.txt
-              mv temp_hdr.txt src/osdep/amiberry.cpp
-              echo "Patched src/osdep/amiberry.cpp"
-            fi
+            echo "#include <unordered_map>" > temp_hdr.txt
+            echo "#include <functional>" >> temp_hdr.txt
+            echo "#include <string>" >> temp_hdr.txt
+            cat src/osdep/amiberry.cpp >> temp_hdr.txt
+            mv temp_hdr.txt src/osdep/amiberry.cpp
+            echo "Patched src/osdep/amiberry.cpp"
+          fi
+
+          if [ -f "src/include/sysdeps.h" ]; then
+            echo "#include <unordered_map>" > temp_sysdeps.txt
+            echo "#include <functional>" >> temp_sysdeps.txt
+            cat src/include/sysdeps.h >> temp_sysdeps.txt
+            mv temp_sysdeps.txt src/include/sysdeps.h
+            echo "Patched src/include/sysdeps.h"
           fi
 
           # 2. Patch posix_spawn for Android in amiberry_update.cpp
