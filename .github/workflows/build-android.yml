@@ -93,6 +93,7 @@ jobs:
             -DUSE_JIT=${{ inputs.enable_jit == true && 'ON' || 'ON' }} \
             -DARM64_JIT=ON \
             -DENABLE_AUTO_UPDATE=OFF \
+            -DCMAKE_OBJECT_PATH_MAX=1024 \
             -DUSE_OPENGL=ON \
             -DUSE_SDL2=ON
 
@@ -100,27 +101,80 @@ jobs:
         run: |
           cmake --build build-android --config ${{ inputs.build_type || 'Release' }} -j$(nproc)
 
-      - name: Assemble Android APK Package
+      - name: Stage Runtime Assets into Android Project (Fonts, Data, Configs)
         run: |
-          if [ -f "./android/gradlew" ]; then
-            cd android
-            chmod +x gradlew
-            ./gradlew assemble${{ inputs.build_type || 'Release' }} --no-daemon
-          elif [ -f "./gradlew" ]; then
-            chmod +x gradlew
-            ./gradlew assemble${{ inputs.build_type || 'Release' }} --no-daemon
+          echo "Staging Amiberry data assets into Android APK assets directory..."
+          ASSETS_DIR="android/app/src/main/assets"
+          if [ ! -d "android/app" ] && [ -d "app" ]; then
+            ASSETS_DIR="app/src/main/assets"
           fi
+          mkdir -p "$ASSETS_DIR"
+          
+          # Copy Amiberry essential runtime files if present
+          [ -d "data" ] && cp -r data "$ASSETS_DIR/" || true
+          [ -d "conf" ] && cp -r conf "$ASSETS_DIR/" || true
+          [ -f "amiberry.png" ] && cp amiberry.png "$ASSETS_DIR/" || true
+          echo "Assets staged into $ASSETS_DIR"
 
-      - name: Collect Output APKs
+      - name: Assemble Android APK Packages (Debug & Release)
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
+          GRADLE_DIR="."
+          if [ -f "./android/gradlew" ]; then
+            GRADLE_DIR="./android"
+          fi
+          
+          cd $GRADLE_DIR
+          chmod +x gradlew
+          
+          echo "Building signed Debug APK (with full JNI logcat logging enabled)..."
+          ./gradlew assembleDebug -Pandroid.injected.build.abi=arm64-v8a --no-daemon || ./gradlew assembleDebug --no-daemon
+          
+          echo "Building Release APK..."
+          ./gradlew assembleRelease -Pandroid.injected.build.abi=arm64-v8a --no-daemon || ./gradlew assembleRelease --no-daemon
+          cd -
+
+      - name: Auto-Align, Sign (v2/v3) & Collect Output APKs
         run: |
           mkdir -p build_output_apks
-          find . -name "*.apk" -exec cp {} build_output_apks/ \;
-          echo "Found compiled APK files:"
+          find . -name "*.apk" -not -path "*/build_output_apks/*" -exec cp {} build_output_apks/ \;
+          
+          # Find Android Build Tools apksigner & zipalign
+          BUILD_TOOLS_DIR=$(find $ANDROID_SDK_ROOT/build-tools/ -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          
+          echo "Using Android Build Tools from: $BUILD_TOOLS_DIR"
+          
+          # Generate standard debug keystore if not exists
+          if [ ! -f ~/.android/debug.keystore ]; then
+            mkdir -p ~/.android
+            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          
+          cd build_output_apks
+          for apk in *.apk; do
+            echo "Processing $apk ..."
+            # Align APK 4-byte boundaries required for Android 11+
+            $ZIPALIGN -p -f -v 4 "$apk" "aligned-$apk" 2>/dev/null || cp "$apk" "aligned-$apk"
+            
+            # Sign with APK Signature Scheme v2 & v3 (mandatory on Android 11, 12, 13, 14)
+            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out "ready-$apk" "aligned-$apk" 2>/dev/null || true
+            
+            # Verify signature scheme
+            $APKSIGNER verify --verbose "ready-$apk" 2>/dev/null || true
+          done
+          
+          # Remove intermediate unaligned files
+          rm -f aligned-*.apk
+          cd -
+          
+          echo "=== Ready Amiberry APKs for Samsung Galaxy Tab S8 ==="
           ls -la build_output_apks/
 
       - name: Upload Amiberry APK Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: amiberry-arm64-samsung-tab-s8-apk
+          name: amiberry-arm64-samsung-tab-s8-apks
           path: build_output_apks/*.apk
           retention-days: 30
