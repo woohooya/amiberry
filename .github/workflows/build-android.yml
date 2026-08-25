@@ -1,4 +1,4 @@
-name: Build Amiberry Android APK (Samsung Tab S8 ARM64)
+name: "Build Amiberry Android APK"
 
 on:
   workflow_dispatch:
@@ -19,10 +19,13 @@ on:
   push:
     branches:
       - master
+      - master
+      - main
+      - preview
 
 jobs:
   build-android-arm64:
-    name: Compile Amiberry for Android (arm64-v8a)
+    name: "Compile Amiberry for Android (arm64-v8a)"
     runs-on: ubuntu-22.04
 
     steps:
