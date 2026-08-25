@@ -74,10 +74,15 @@ jobs:
             echo "Patched src/include/sysdeps.h"
           fi
 
-          # 2. Patch posix_spawn for Android in amiberry_update.cpp
+          # 2. Provide posix_spawn stubs for Android in amiberry_update.cpp
           if [ -f "src/osdep/amiberry_update.cpp" ]; then
+            echo "#include <unistd.h>" > temp_upd.txt
+            echo "static inline int posix_spawn(void* a, const char* b, void* c, void* d, char* const e[], char* const f[]) { return -1; }" >> temp_upd.txt
+            echo "static inline int posix_spawnp(void* a, const char* b, void* c, void* d, char* const e[], char* const f[]) { return -1; }" >> temp_upd.txt
+            cat src/osdep/amiberry_update.cpp >> temp_upd.txt
+            mv temp_upd.txt src/osdep/amiberry_update.cpp
             sed -i 's|<spawn.h>|<unistd.h>|g' src/osdep/amiberry_update.cpp 2>/dev/null || true
-            echo "Patched src/osdep/amiberry_update.cpp"
+            echo "Patched src/osdep/amiberry_update.cpp with posix_spawn stub"
           fi
 
           # 3. Patch AndroidManifest.xml for Android 12+ (Samsung Tab S8)
