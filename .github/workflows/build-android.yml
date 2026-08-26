@@ -98,18 +98,9 @@ jobs:
 
           # Patch build.gradle to handle duplicate native library merges gracefully
           find . -name "build.gradle" -not -path "*/build/*" | while read -r gradle_file; do
-            if grep -q "android {" "$gradle_file" && ! grep -q "pickFirst" "$gradle_file"; then
-              python3 -c "
-import sys
-path = sys.argv[1]
-with open(path, 'r') as f:
-    text = f.read()
-if 'android {' in text and 'packagingOptions' not in text:
-    text = text.replace('android {', 'android {\n    packagingOptions {\n        pickFirst \"**/*.so\"\n    }')
-    with open(path, 'w') as f:
-        f.write(text)
-    print('Patched packagingOptions in ' + path)
-" "$gradle_file"
+            if grep -q "android {" "$gradle_file" && ! grep -q "packagingOptions" "$gradle_file"; then
+              echo -e '\nandroid {\n    packagingOptions {\n        pickFirst "lib/**/*.so"\n        pickFirst "**/*.so"\n    }\n}' >> "$gradle_file"
+              echo "Appended packagingOptions to $gradle_file"
             fi
           done
 
