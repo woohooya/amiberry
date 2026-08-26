@@ -86,27 +86,15 @@ jobs:
           fi
 
           # 3. Patch AndroidManifest.xml for Android 12+ (Samsung Tab S8 One UI)
-          python3 -c "
-import glob, re
-
-for m_path in glob.glob('**/AndroidManifest.xml', recursive=True):
-    if 'build' in m_path or '.gradle' in m_path:
-        continue
-    with open(m_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # Add android:exported="true" to activities with intent-filters
-    if '<intent-filter>' in content and 'android:exported=' not in content:
-        content = re.sub(r'(<activity(?![^>]*android:exported=))', r'\1 android:exported="true"', content)
-    
-    # Add android:extractNativeLibs="true" to application tag
-    if '<application' in content and 'android:extractNativeLibs=' not in content:
-        content = re.sub(r'(<application)', r'\1 android:extractNativeLibs="true"', content)
-    
-    with open(m_path, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print('Patched AndroidManifest:', m_path)
-"
+          find . -name "AndroidManifest.xml" -not -path "*/build/*" | while read -r manifest; do
+            if ! grep -q "android:exported=" "$manifest"; then
+              sed -i 's/<activity /<activity android:exported="true" /g' "$manifest"
+            fi
+            if ! grep -q "android:extractNativeLibs=" "$manifest"; then
+              sed -i 's/<application /<application android:extractNativeLibs="true" /g' "$manifest"
+            fi
+            echo "Patched $manifest"
+          done
 
       - name: "Configure CMake Native Toolchain"
         env:
