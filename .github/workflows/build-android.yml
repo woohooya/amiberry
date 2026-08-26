@@ -12,44 +12,44 @@ on:
           - 'Release'
           - 'Debug'
       enable_jit:
-        description: 'Enable ARM64 JIT Compilation'
+        description: 'Enable ARM64 JIT Engine'
         required: true
         default: true
         type: boolean
   push:
     branches:
       - master
-      - master
       - main
       - preview
+      - release-*
 
 jobs:
-  build-android-arm64:
-    name: "Compile Amiberry for Android (arm64-v8a)"
+  build-android-apk:
+    name: "Build Android ARM64-v8a APK"
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Amiberry Repository & Submodules
+      - name: "Checkout Amiberry Repository"
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Setup Java JDK 17
+      - name: "Set up Java JDK 17"
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: "Set up Android SDK & NDK"
         uses: android-actions/setup-android@v3
 
-      - name: Install Android NDK (25.2.9519653) & Build Tools
+      - name: "Install Android NDK (r25c) & CMake"
         run: |
           yes | sdkmanager --licenses
           sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-      - name: Install System Dependencies
+      - name: "Install Host Dependencies"
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libxml2-dev libpng-dev libmpg123-dev libflac-dev
@@ -105,10 +105,7 @@ path = sys.argv[1]
 with open(path, 'r') as f:
     text = f.read()
 if 'android {' in text and 'packagingOptions' not in text:
-    text = text.replace('android {', 'android {
-    packagingOptions {
-        pickFirst "**/*.so"
-    }')
+    text = text.replace('android {', 'android {\n    packagingOptions {\n        pickFirst \"**/*.so\"\n    }')
     with open(path, 'w') as f:
         f.write(text)
     print('Patched packagingOptions in ' + path)
@@ -116,7 +113,7 @@ if 'android {' in text and 'packagingOptions' not in text:
             fi
           done
 
-      - name: "Configure CMake Native Toolchain"
+      - name: "Configure CMake for Android ARM64-v8a"
         env:
           INPUT_BUILD_TYPE: ${{ inputs.build_type }}
           INPUT_ENABLE_JIT: ${{ inputs.enable_jit }}
@@ -125,8 +122,6 @@ if 'android {' in text and 'packagingOptions' not in text:
           ENABLE_JIT="ON"
           if [ "$INPUT_ENABLE_JIT" = "false" ]; then
             ENABLE_JIT="OFF"
-          elif [ "$INPUT_ENABLE_JIT" = "true" ]; then
-            ENABLE_JIT="ON"
           fi
 
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
@@ -144,7 +139,7 @@ if 'android {' in text and 'packagingOptions' not in text:
             -DUSE_OPENGL=ON \
             -DUSE_SDL2=ON
 
-      - name: "Compile Native C++ Amiberry Core"
+      - name: "Compile Amiberry Native Shared Library"
         env:
           INPUT_BUILD_TYPE: ${{ inputs.build_type }}
         run: |
@@ -164,9 +159,10 @@ if 'android {' in text and 'packagingOptions' not in text:
           [ -f "amiberry.png" ] && cp amiberry.png "$ASSETS_DIR/" || true
           echo "Assets staged into $ASSETS_DIR"
 
-      - name: "Assemble Android APK Packages (Debug & Release)"
+      - name: "Build Android APK via Gradle"
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
+
           GRADLE_DIR="."
           if [ -f "./android/gradlew" ]; then
             GRADLE_DIR="./android"
@@ -182,7 +178,7 @@ if 'android {' in text and 'packagingOptions' not in text:
 
       - name: "Align & Sign Installable APKs for Samsung Galaxy Tab S8"
         run: |
-          mkdir -p build_output_apks
+          mkdir -p output_apks
 
           # Find Android Build Tools apksigner & zipalign
           BUILD_TOOLS_DIR=$(find $ANDROID_SDK_ROOT/build-tools/ -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
@@ -200,28 +196,28 @@ if 'android {' in text and 'packagingOptions' not in text:
           RAW_DEBUG=$(find . -path "*/outputs/apk/debug/*debug*.apk" 2>/dev/null | head -n 1)
           if [ -n "$RAW_DEBUG" ] && [ -f "$RAW_DEBUG" ]; then
             echo "Processing Debug APK: $RAW_DEBUG"
-            $ZIPALIGN -p -f -v 4 "$RAW_DEBUG" build_output_apks/temp_debug.apk
-            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out build_output_apks/Amiberry-v5-TabS8-Debug.apk build_output_apks/temp_debug.apk
-            rm -f build_output_apks/temp_debug.apk
-            $APKSIGNER verify --verbose build_output_apks/Amiberry-v5-TabS8-Debug.apk
+            $ZIPALIGN -p -f -v 4 "$RAW_DEBUG" output_apks/temp_debug.apk
+            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out output_apks/Amiberry-v5-TabS8-Debug.apk output_apks/temp_debug.apk
+            rm -f output_apks/temp_debug.apk
+            $APKSIGNER verify --verbose output_apks/Amiberry-v5-TabS8-Debug.apk
           fi
 
           # 2. Sign Release APK
           RAW_RELEASE=$(find . -path "*/outputs/apk/release/*release*.apk" 2>/dev/null | head -n 1)
           if [ -n "$RAW_RELEASE" ] && [ -f "$RAW_RELEASE" ]; then
             echo "Processing Release APK: $RAW_RELEASE"
-            $ZIPALIGN -p -f -v 4 "$RAW_RELEASE" build_output_apks/temp_rel.apk
-            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out build_output_apks/Amiberry-v5-TabS8-Release.apk build_output_apks/temp_rel.apk
-            rm -f build_output_apks/temp_rel.apk
-            $APKSIGNER verify --verbose build_output_apks/Amiberry-v5-TabS8-Release.apk
+            $ZIPALIGN -p -f -v 4 "$RAW_RELEASE" output_apks/temp_rel.apk
+            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out output_apks/Amiberry-v5-TabS8-Release.apk output_apks/temp_rel.apk
+            rm -f output_apks/temp_rel.apk
+            $APKSIGNER verify --verbose output_apks/Amiberry-v5-TabS8-Release.apk
           fi
 
           echo "=== Verified Installable APKs Ready ==="
-          ls -la build_output_apks/
+          ls -lh output_apks/
 
-      - name: "Upload Amiberry APK Release Artifact"
+      - name: "Upload Amiberry Android APK Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: amiberry-arm64-samsung-tab-s8-apks
-          path: build_output_apks/*.apk
+          name: amiberry-android-arm64-samsung-tab-s8-apks
+          path: output_apks/*.apk
           retention-days: 30
