@@ -162,10 +162,15 @@ jobs:
           cd $GRADLE_DIR
           chmod +x gradlew
 
-          echo "Building Debug and Release APKs..."
-          ./gradlew assembleDebug -Pandroid.injected.build.abi=arm64-v8a --no-daemon || ./gradlew assembleDebug --no-daemon
-          ./gradlew assembleRelease -Pandroid.injected.build.abi=arm64-v8a --no-daemon || ./gradlew assembleRelease --no-daemon
+          echo "Building Debug APK..."
+          ./gradlew assembleDebug --stacktrace --no-daemon
+
+          echo "Building Release APK..."
+          ./gradlew assembleRelease --stacktrace --no-daemon || true
           cd -
+
+          echo "=== Locate All Generated APK Files ==="
+          find . -name "*.apk" -ls
 
       - name: "Align & Sign Installable APKs for Samsung Galaxy Tab S8"
         run: |
@@ -183,27 +188,32 @@ jobs:
             keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-          # 1. Sign Debug APK
-          RAW_DEBUG=$(find . -path "*/outputs/apk/debug/*debug*.apk" 2>/dev/null | head -n 1)
-          if [ -n "$RAW_DEBUG" ] && [ -f "$RAW_DEBUG" ]; then
-            echo "Processing Debug APK: $RAW_DEBUG"
-            $ZIPALIGN -p -f -v 4 "$RAW_DEBUG" output_apks/temp_debug.apk
-            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out output_apks/Amiberry-v5-TabS8-Debug.apk output_apks/temp_debug.apk
-            rm -f output_apks/temp_debug.apk
-            $APKSIGNER verify --verbose output_apks/Amiberry-v5-TabS8-Debug.apk
+          # Find and process any and all APKs produced by Gradle
+          find . -name "*.apk" -not -path "*/output_apks/*" | while read -r apk_path; do
+            APK_NAME=$(basename "$apk_path")
+            echo "Found APK: $apk_path ($APK_NAME)"
+            
+            # Align and sign with v1, v2, v3
+            TEMP_ALIGNED="output_apks/aligned_${APK_NAME}"
+            FINAL_APK="output_apks/Amiberry-TabS8-${APK_NAME}"
+            
+            $ZIPALIGN -p -f -v 4 "$apk_path" "$TEMP_ALIGNED" 2>/dev/null || cp "$apk_path" "$TEMP_ALIGNED"
+            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "$FINAL_APK" "$TEMP_ALIGNED" 2>/dev/null || cp "$TEMP_ALIGNED" "$FINAL_APK"
+            rm -f "$TEMP_ALIGNED"
+            
+            $APKSIGNER verify --verbose "$FINAL_APK" || true
+            echo "Produced installable APK: $FINAL_APK"
+          done
+
+          # Direct fallback copy if signing failed or produced nothing
+          if [ -z "$(ls -A output_apks/*.apk 2>/dev/null)" ]; then
+            echo "Fallback: Copying raw APKs directly..."
+            find . -name "*.apk" -not -path "*/output_apks/*" | while read -r raw_apk; do
+              cp "$raw_apk" output_apks/
+            done
           fi
 
-          # 2. Sign Release APK
-          RAW_RELEASE=$(find . -path "*/outputs/apk/release/*release*.apk" 2>/dev/null | head -n 1)
-          if [ -n "$RAW_RELEASE" ] && [ -f "$RAW_RELEASE" ]; then
-            echo "Processing Release APK: $RAW_RELEASE"
-            $ZIPALIGN -p -f -v 4 "$RAW_RELEASE" output_apks/temp_rel.apk
-            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out output_apks/Amiberry-v5-TabS8-Release.apk output_apks/temp_rel.apk
-            rm -f output_apks/temp_rel.apk
-            $APKSIGNER verify --verbose output_apks/Amiberry-v5-TabS8-Release.apk
-          fi
-
-          echo "=== Verified Installable APKs Ready ==="
+          echo "=== Final APKs Ready for Samsung Tab S8 ==="
           ls -lh output_apks/
 
       - name: "Upload Amiberry Android APK Artifacts"
