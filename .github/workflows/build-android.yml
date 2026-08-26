@@ -85,7 +85,7 @@ jobs:
             echo "Patched src/osdep/amiberry_update.cpp with posix_spawn stub"
           fi
 
-          # 3. Patch AndroidManifest.xml for Android 12+ (Samsung Tab S8 One UI)
+          # 3. Patch AndroidManifest.xml and build.gradle for Android 12+ (Samsung Tab S8)
           find . -name "AndroidManifest.xml" -not -path "*/build/*" | while read -r manifest; do
             if ! grep -q "android:exported=" "$manifest"; then
               sed -i 's/<activity /<activity android:exported="true" /g' "$manifest"
@@ -94,6 +94,18 @@ jobs:
               sed -i 's/<application /<application android:extractNativeLibs="true" /g' "$manifest"
             fi
             echo "Patched $manifest"
+          done
+
+          # Patch build.gradle to handle duplicate native library merges gracefully
+          find . -name "build.gradle" -not -path "*/build/*" | while read -r gradle_file; do
+            if grep -q "android {" "$gradle_file" && ! grep -q "pickFirst 'lib/**/*.so'" "$gradle_file"; then
+              sed -i '/android {/a     packagingOptions {
+        pickFirst "lib/**/*.so"
+        pickFirst "**/libc++_shared.so"
+        pickFirst "**/libamiberry.so"
+    }' "$gradle_file"
+              echo "Patched packagingOptions in $gradle_file"
+            fi
           done
 
       - name: "Configure CMake Native Toolchain"
@@ -131,16 +143,8 @@ jobs:
           BUILD_TYPE="${INPUT_BUILD_TYPE:-Release}"
           cmake --build build-android --config $BUILD_TYPE -j$(nproc)
 
-      - name: "Stage Native Libraries & Runtime Assets into Android Project"
+      - name: "Stage Runtime Assets into Android Project (Fonts, Data, Configs)"
         run: |
-          echo "Staging compiled ARM64 .so libraries into Android jniLibs..."
-          mkdir -p android/app/src/main/jniLibs/arm64-v8a app/src/main/jniLibs/arm64-v8a
-          find build-android -name "*.so" | while read -r so_file; do
-            cp "$so_file" android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
-            cp "$so_file" app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
-            echo "Staged library: $so_file"
-          done
-
           echo "Staging Amiberry data assets..."
           ASSETS_DIR="android/app/src/main/assets"
           if [ ! -d "android/app" ] && [ -d "app" ]; then
