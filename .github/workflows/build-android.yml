@@ -85,13 +85,28 @@ jobs:
             echo "Patched src/osdep/amiberry_update.cpp with posix_spawn stub"
           fi
 
-          # 3. Patch AndroidManifest.xml for Android 12+ (Samsung Tab S8)
-          find . -name "AndroidManifest.xml" -not -path "*/build/*" | while read -r manifest; do
-            if grep -q "<intent-filter>" "$manifest" && ! grep -q "android:exported=" "$manifest"; then
-              sed -i 's/<activity /<activity android:exported="true" /g' "$manifest"
-              echo "Patched android:exported in $manifest"
-            fi
-          done
+          # 3. Patch AndroidManifest.xml for Android 12+ (Samsung Tab S8 One UI)
+          python3 -c "
+import glob, re
+
+for m_path in glob.glob('**/AndroidManifest.xml', recursive=True):
+    if 'build' in m_path or '.gradle' in m_path:
+        continue
+    with open(m_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Add android:exported="true" to activities with intent-filters
+    if '<intent-filter>' in content and 'android:exported=' not in content:
+        content = re.sub(r'(<activity(?![^>]*android:exported=))', r'\1 android:exported="true"', content)
+    
+    # Add android:extractNativeLibs="true" to application tag
+    if '<application' in content and 'android:extractNativeLibs=' not in content:
+        content = re.sub(r'(<application)', r'\1 android:extractNativeLibs="true"', content)
+    
+    with open(m_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    print('Patched AndroidManifest:', m_path)
+"
 
       - name: "Configure CMake Native Toolchain"
         env:
@@ -128,84 +143,83 @@ jobs:
           BUILD_TYPE="${INPUT_BUILD_TYPE:-Release}"
           cmake --build build-android --config $BUILD_TYPE -j$(nproc)
 
-      - name: Stage Runtime Assets into Android Project (Fonts, Data, Configs)
+      - name: "Stage Native Libraries & Runtime Assets into Android Project"
         run: |
-          echo "Staging Amiberry data assets into Android APK assets directory..."
+          echo "Staging compiled ARM64 .so libraries into Android jniLibs..."
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a app/src/main/jniLibs/arm64-v8a
+          find build-android -name "*.so" | while read -r so_file; do
+            cp "$so_file" android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
+            cp "$so_file" app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
+            echo "Staged library: $so_file"
+          done
+
+          echo "Staging Amiberry data assets..."
           ASSETS_DIR="android/app/src/main/assets"
           if [ ! -d "android/app" ] && [ -d "app" ]; then
             ASSETS_DIR="app/src/main/assets"
           fi
           mkdir -p "$ASSETS_DIR"
-          
-          # Copy Amiberry essential runtime files if present
           [ -d "data" ] && cp -r data "$ASSETS_DIR/" || true
           [ -d "conf" ] && cp -r conf "$ASSETS_DIR/" || true
           [ -f "amiberry.png" ] && cp amiberry.png "$ASSETS_DIR/" || true
           echo "Assets staged into $ASSETS_DIR"
 
-      - name: Assemble Android APK Packages (Debug & Release)
+      - name: "Assemble Android APK Packages (Debug & Release)"
         run: |
           export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653
           GRADLE_DIR="."
           if [ -f "./android/gradlew" ]; then
             GRADLE_DIR="./android"
           fi
-          
+
           cd $GRADLE_DIR
           chmod +x gradlew
-          
-          echo "Building signed Debug APK (with full JNI logcat logging enabled)..."
+
+          echo "Building Debug and Release APKs..."
           ./gradlew assembleDebug -Pandroid.injected.build.abi=arm64-v8a --no-daemon || ./gradlew assembleDebug --no-daemon
-          
-          echo "Building Release APK..."
           ./gradlew assembleRelease -Pandroid.injected.build.abi=arm64-v8a --no-daemon || ./gradlew assembleRelease --no-daemon
           cd -
 
-      - name: Package & Verify Installable APKs for Samsung Galaxy Tab S8
+      - name: "Align & Sign Installable APKs for Samsung Galaxy Tab S8"
         run: |
           mkdir -p build_output_apks
-          
+
           # Find Android Build Tools apksigner & zipalign
           BUILD_TOOLS_DIR=$(find $ANDROID_SDK_ROOT/build-tools/ -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
           ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
           echo "Using Android Build Tools: $BUILD_TOOLS_DIR"
-          
+
           # Ensure keystore exists for signing
           mkdir -p ~/.android
           if [ ! -f ~/.android/debug.keystore ]; then
             keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
-          
-          # 1. Process Debug APK (Gradle already signed this)
-          DEBUG_APK=$(find . -path "*/outputs/apk/debug/*.apk" 2>/dev/null | head -n 1)
-          if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
-            echo "Found Debug APK: $DEBUG_APK"
-            cp "$DEBUG_APK" build_output_apks/Amiberry-arm64-TabS8-Debug.apk
-            $APKSIGNER verify --verbose build_output_apks/Amiberry-arm64-TabS8-Debug.apk || true
+
+          # 1. Sign Debug APK
+          RAW_DEBUG=$(find . -path "*/outputs/apk/debug/*debug*.apk" 2>/dev/null | head -n 1)
+          if [ -n "$RAW_DEBUG" ] && [ -f "$RAW_DEBUG" ]; then
+            echo "Processing Debug APK: $RAW_DEBUG"
+            $ZIPALIGN -p -f -v 4 "$RAW_DEBUG" build_output_apks/temp_debug.apk
+            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out build_output_apks/Amiberry-v5-TabS8-Debug.apk build_output_apks/temp_debug.apk
+            rm -f build_output_apks/temp_debug.apk
+            $APKSIGNER verify --verbose build_output_apks/Amiberry-v5-TabS8-Debug.apk
           fi
-          
-          # 2. Process Release APK (Align and sign with v2/v3 scheme)
-          RELEASE_APK=$(find . -path "*/outputs/apk/release/*.apk" 2>/dev/null | head -n 1)
-          if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
-            echo "Found Release APK: $RELEASE_APK"
-            $ZIPALIGN -p -f -v 4 "$RELEASE_APK" build_output_apks/temp-aligned.apk 2>/dev/null || cp "$RELEASE_APK" build_output_apks/temp-aligned.apk
-            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out build_output_apks/Amiberry-arm64-TabS8-Release.apk build_output_apks/temp-aligned.apk
-            rm -f build_output_apks/temp-aligned.apk
-            $APKSIGNER verify --verbose build_output_apks/Amiberry-arm64-TabS8-Release.apk || true
+
+          # 2. Sign Release APK
+          RAW_RELEASE=$(find . -path "*/outputs/apk/release/*release*.apk" 2>/dev/null | head -n 1)
+          if [ -n "$RAW_RELEASE" ] && [ -f "$RAW_RELEASE" ]; then
+            echo "Processing Release APK: $RAW_RELEASE"
+            $ZIPALIGN -p -f -v 4 "$RAW_RELEASE" build_output_apks/temp_rel.apk
+            $APKSIGNER sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out build_output_apks/Amiberry-v5-TabS8-Release.apk build_output_apks/temp_rel.apk
+            rm -f build_output_apks/temp_rel.apk
+            $APKSIGNER verify --verbose build_output_apks/Amiberry-v5-TabS8-Release.apk
           fi
-          
-          # Fallback
-          if [ -z "$(ls -A build_output_apks/*.apk 2>/dev/null)" ]; then
-            find . -name "*.apk" -not -path "*/build_output_apks/*" | while read -r apk_path; do
-              cp "$apk_path" build_output_apks/
-            done
-          fi
-          
-          echo "=== Ready-to-Install Amiberry APKs for Samsung Galaxy Tab S8 ==="
+
+          echo "=== Verified Installable APKs Ready ==="
           ls -la build_output_apks/
 
-      - name: Upload Amiberry APK Release Artifact
+      - name: "Upload Amiberry APK Release Artifact"
         uses: actions/upload-artifact@v4
         with:
           name: amiberry-arm64-samsung-tab-s8-apks
